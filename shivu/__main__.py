@@ -1,250 +1,129 @@
-import importlib
-import time
-import random
-import re
+"""
+waifu/__main__.py  —  Entry point.
+Run with:  python -m waifu
+"""
 import asyncio
-from html import escape 
+import importlib
+import os
+import signal
+from contextlib import suppress
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-from telegram import Update
-from telegram.ext import CommandHandler, CallbackContext, MessageHandler, filters
+from aiohttp import web
 
-from shivu import collection, top_global_groups_collection, group_user_totals_collection, user_collection, user_totals_collection, shivuu
-from shivu import application, SUPPORT_CHAT, UPDATE_CHAT, db, LOGGER
-from shivu.modules import ALL_MODULES
+from waifu import ALL_MODULES, LOGGER
 
 
-locks = {}
-message_counters = {}
-spam_counters = {}
-last_characters = {}
-sent_characters = {}
-first_correct_guesses = {}
-message_counts = {}
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  KEEP-ALIVE SERVER
+#  Render Web Service ke liye port 8080 open karna
+#  zaroori hai — bina iske Render process kill karta hai
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def keep_alive():
+    async def handle(request):
+        return web.Response(
+            text="<h2>Waifu Bot is alive!</h2>",
+            content_type="text/html"
+        )
+
+    async def health(request):
+        return web.json_response({"status": "ok", "bot": "WaifuBot"})
+
+    webapp = web.Application()
+    webapp.router.add_get("/", handle)
+    webapp.router.add_get("/health", health)
+
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    LOGGER.info(f"[KeepAlive] HTTP server started on port {port}")
 
 
-for module_name in ALL_MODULES:
-    imported_module = importlib.import_module("shivu.modules." + module_name)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  MIGRATIONS & POST-INIT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def _migrate_indexes() -> None:
+    """
+    Drop legacy indexes from the old bot schema that conflict with new code.
+    Safe to call on every startup — silently skips if they don't exist.
+    """
+    from waifu import user_collection
+    try:
+        await user_collection.drop_index("user_id_1")
+        LOGGER.info("Migration: dropped stale index users.user_id_1")
+    except Exception:
+        pass
 
 
-last_user = {}
-warned_users = {}
-def escape_markdown(text):
-    escape_chars = r'\*_`\\~>#+-=|{}.!'
-    return re.sub(r'([%s])' % re.escape(escape_chars), r'\\\1', text)
+async def _post_init(application) -> None:
+    """Runs once after the Application starts — migrations, indexes, scheduler."""
+    from waifu.modules.inlinequery import create_indexes
+    from waifu.modules.waifu_drop import start_scheduler
+    await _migrate_indexes()
+    await create_indexes()
+    LOGGER.info("DB indexes ensured.")
+    start_scheduler(application.bot)
+    LOGGER.info("Drop scheduler started.")
 
 
-async def message_counter(update: Update, context: CallbackContext) -> None:
-    chat_id = str(update.effective_chat.id)
-    user_id = update.effective_user.id
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  MAIN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    if chat_id not in locks:
-        locks[chat_id] = asyncio.Lock()
-    lock = locks[chat_id]
+async def _run_bot() -> None:
+    """Start keep-alive server, then run bot via async polling."""
+    # ── Step 1: Port PEHLE bind karo ─────────────────
+    await keep_alive()
 
-    async with lock:
-        
-        chat_frequency = await user_totals_collection.find_one({'chat_id': chat_id})
-        if chat_frequency:
-            message_frequency = chat_frequency.get('message_frequency', 100)
-        else:
-            message_frequency = 100
+    # ── Step 2: Modules load karo ────────────────────
+    LOGGER.info("Loading %d module(s)…", len(ALL_MODULES))
+    for name in ALL_MODULES:
+        try:
+            importlib.import_module(f"waifu.modules.{name}")
+            LOGGER.debug("  ✓ %s", name)
+        except Exception as exc:
+            LOGGER.error("  ✗ %s — %s", name, exc, exc_info=True)
+            raise
+    LOGGER.info("All modules loaded.")
 
-        
-        if chat_id in last_user and last_user[chat_id]['user_id'] == user_id:
-            last_user[chat_id]['count'] += 1
-            if last_user[chat_id]['count'] >= 10:
-            
-                if user_id in warned_users and time.time() - warned_users[user_id] < 600:
-                    return
-                else:
-                    
-                    await update.message.reply_text(f"⚠️ Don't Spam {update.effective_user.first_name}...\nYour Messages Will be ignored for 10 Minutes...")
-                    warned_users[user_id] = time.time()
-                    return
-        else:
-            last_user[chat_id] = {'user_id': user_id, 'count': 1}
+    # ── Step 3: Bot initialize karo ──────────────────
+    from waifu import application
+    application.post_init = _post_init
 
-    
-        if chat_id in message_counts:
-            message_counts[chat_id] += 1
-        else:
-            message_counts[chat_id] = 1
+    # ── Step 4: Async polling start karo ─────────────
+    LOGGER.info("Starting bot (async polling)…")
+    async with application:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+        LOGGER.info("Bot is running!")
 
-    
-        if message_counts[chat_id] % message_frequency == 0:
-            await send_image(update, context)
-            
-            message_counts[chat_id] = 0
-            
-async def send_image(update: Update, context: CallbackContext) -> None:
-    chat_id = update.effective_chat.id
+        # Stop signal ka wait karo
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGABRT):
+            with suppress(NotImplementedError):
+                loop.add_signal_handler(sig, stop_event.set)
 
-    all_characters = list(await collection.find({}).to_list(length=None))
-    
-    if chat_id not in sent_characters:
-        sent_characters[chat_id] = []
+        await stop_event.wait()
 
-    if len(sent_characters[chat_id]) == len(all_characters):
-        sent_characters[chat_id] = []
-
-    character = random.choice([c for c in all_characters if c['id'] not in sent_characters[chat_id]])
-
-    sent_characters[chat_id].append(character['id'])
-    last_characters[chat_id] = character
-
-    if chat_id in first_correct_guesses:
-        del first_correct_guesses[chat_id]
-
-    await context.bot.send_photo(
-        chat_id=chat_id,
-        photo=character['img_url'],
-        caption=f"""A New {character['rarity']} Character Appeared...\n/guess Character Name and add in Your Harem""",
-        parse_mode='Markdown')
-
-
-async def guess(update: Update, context: CallbackContext) -> None:
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-
-    if chat_id not in last_characters:
-        return
-
-    if chat_id in first_correct_guesses:
-        await update.message.reply_text(f'❌️ Already Guessed By Someone.. Try Next Time Bruhh ')
-        return
-
-    guess = ' '.join(context.args).lower() if context.args else ''
-    
-    if "()" in guess or "&" in guess.lower():
-        await update.message.reply_text("Nahh You Can't use This Types of words in your guess..❌️")
-        return
-
-
-    name_parts = last_characters[chat_id]['name'].lower().split()
-
-    if sorted(name_parts) == sorted(guess.split()) or any(part == guess for part in name_parts):
-
-    
-        first_correct_guesses[chat_id] = user_id
-        
-        user = await user_collection.find_one({'id': user_id})
-        if user:
-            update_fields = {}
-            if hasattr(update.effective_user, 'username') and update.effective_user.username != user.get('username'):
-                update_fields['username'] = update.effective_user.username
-            if update.effective_user.first_name != user.get('first_name'):
-                update_fields['first_name'] = update.effective_user.first_name
-            if update_fields:
-                await user_collection.update_one({'id': user_id}, {'$set': update_fields})
-            
-            await user_collection.update_one({'id': user_id}, {'$push': {'characters': last_characters[chat_id]}})
-      
-        elif hasattr(update.effective_user, 'username'):
-            await user_collection.insert_one({
-                'id': user_id,
-                'username': update.effective_user.username,
-                'first_name': update.effective_user.first_name,
-                'characters': [last_characters[chat_id]],
-            })
-
-        
-        group_user_total = await group_user_totals_collection.find_one({'user_id': user_id, 'group_id': chat_id})
-        if group_user_total:
-            update_fields = {}
-            if hasattr(update.effective_user, 'username') and update.effective_user.username != group_user_total.get('username'):
-                update_fields['username'] = update.effective_user.username
-            if update.effective_user.first_name != group_user_total.get('first_name'):
-                update_fields['first_name'] = update.effective_user.first_name
-            if update_fields:
-                await group_user_totals_collection.update_one({'user_id': user_id, 'group_id': chat_id}, {'$set': update_fields})
-            
-            await group_user_totals_collection.update_one({'user_id': user_id, 'group_id': chat_id}, {'$inc': {'count': 1}})
-      
-        else:
-            await group_user_totals_collection.insert_one({
-                'user_id': user_id,
-                'group_id': chat_id,
-                'username': update.effective_user.username,
-                'first_name': update.effective_user.first_name,
-                'count': 1,
-            })
-
-
-    
-        group_info = await top_global_groups_collection.find_one({'group_id': chat_id})
-        if group_info:
-            update_fields = {}
-            if update.effective_chat.title != group_info.get('group_name'):
-                update_fields['group_name'] = update.effective_chat.title
-            if update_fields:
-                await top_global_groups_collection.update_one({'group_id': chat_id}, {'$set': update_fields})
-            
-            await top_global_groups_collection.update_one({'group_id': chat_id}, {'$inc': {'count': 1}})
-      
-        else:
-            await top_global_groups_collection.insert_one({
-                'group_id': chat_id,
-                'group_name': update.effective_chat.title,
-                'count': 1,
-            })
-
-
-        
-        keyboard = [[InlineKeyboardButton(f"See Harem", switch_inline_query_current_chat=f"collection.{user_id}")]]
-
-
-        await update.message.reply_text(f'<b><a href="tg://user?id={user_id}">{escape(update.effective_user.first_name)}</a></b> You Guessed a New Character ✅️ \n\n𝗡𝗔𝗠𝗘: <b>{last_characters[chat_id]["name"]}</b> \n𝗔𝗡𝗜𝗠𝗘: <b>{last_characters[chat_id]["anime"]}</b> \n𝗥𝗔𝗜𝗥𝗧𝗬: <b>{last_characters[chat_id]["rarity"]}</b>\n\nThis Character added in Your harem.. use /harem To see your harem', parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
-
-    else:
-        await update.message.reply_text('Please Write Correct Character Name... ❌️')
-   
-
-async def fav(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-
-    
-    if not context.args:
-        await update.message.reply_text('Please provide Character id...')
-        return
-
-    character_id = context.args[0]
-
-    
-    user = await user_collection.find_one({'id': user_id})
-    if not user:
-        await update.message.reply_text('You have not Guessed any characters yet....')
-        return
-
-
-    character = next((c for c in user['characters'] if c['id'] == character_id), None)
-    if not character:
-        await update.message.reply_text('This Character is Not In your collection')
-        return
-
-    
-    user['favorites'] = [character_id]
-
-    
-    await user_collection.update_one({'id': user_id}, {'$set': {'favorites': user['favorites']}})
-
-    await update.message.reply_text(f'Character {character["name"]} has been added to your favorite...')
-    
-
+        # Cleanup
+        LOGGER.info("Stopping bot…")
+        await application.updater.stop()
+        await application.stop()
 
 
 def main() -> None:
-    """Run bot."""
+    try:
+        asyncio.get_event_loop().run_until_complete(_run_bot())
+    except KeyboardInterrupt:
+        LOGGER.info("Bot stopped by user.")
 
-    application.add_handler(CommandHandler(["guess", "protecc", "collect", "grab", "hunt"], guess, block=False))
-    application.add_handler(CommandHandler("fav", fav, block=False))
-    application.add_handler(MessageHandler(filters.ALL, message_counter, block=False))
 
-    application.run_polling(drop_pending_updates=True)
-    
 if __name__ == "__main__":
-    shivuu.start()
-    LOGGER.info("Bot started")
     main()
-
+    
