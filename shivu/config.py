@@ -2,18 +2,19 @@ class Config(object):
     LOGGER = True
 
     # Get this value from my.telegram.org/apps
-    OWNER_ID = "6765826972"
-    sudo_users = "6845325416", "6765826972"
-    GROUP_ID = -1002133191051
-    TOKEN = "6707490163:AAHZzqjm3rbEZsObRiNaT7DMtw_i5WPo_0o"
-    mongo_url = "mongodb+srv://HaremDBBot:ThisIsPasswordForHaremDB@haremdb.swzjngj.mongodb.net/?retryWrites=true&w=majority"
+    OWNER_ID = 8546535996
+    sudo_users = 8053803602
+    GROUP_ID = -1003727303409
+    TOKEN = 8626222051:AAHNhAoKyaftc2xh5eK0Im0XEhMx1kb0jjg
+    mongo_url = mongodb+srv://gagansiwan89_db_user:gagansiwan89@cluster0.vf66t20.mongodb.net/?appName=Cluster0
     PHOTO_URL = ["https://telegra.ph/file/b925c3985f0f325e62e17.jpg", "https://telegra.ph/file/4211fb191383d895dab9d.jpg"]
-    SUPPORT_CHAT = "Collect_em_support"
-    UPDATE_CHAT = "Collect_em_support"
-    BOT_USERNAME = "Collect_Em_AllBot"
-    CHARA_CHANNEL_ID = "-1002133191051"
-    api_id = 26626068
-    api_hash = "bf423698bcbe33cfd58b11c78c42caa2"
+    SUPPORT_CHAT = Anime_InfinityChatGroup
+    UPDATE_CHAT = Adambotupdates
+    BOT_USERNAME = Waifugrabbberbot
+    CHARA_CHANNEL_ID = -1003923346693
+    api_id = 34224204
+    api_hash = 0dfa074770803265e8c61ddda0ad6fb0
+
 
     
 class Production(Config):
