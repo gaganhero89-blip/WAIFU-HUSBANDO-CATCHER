@@ -1,5 +1,13 @@
+import asyncio
 import logging  
 import os
+
+# Fix for Python 3.14 compatibility
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 from pyrogram import Client 
 from telegram.ext import Application
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -16,7 +24,6 @@ logging.getLogger("pyrate_limiter").setLevel(logging.ERROR)
 LOGGER = logging.getLogger(__name__)
 
 from shivu.config import Development as Config
-
 
 api_id = Config.api_id
 api_hash = Config.api_hash
