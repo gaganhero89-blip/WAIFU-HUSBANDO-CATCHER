@@ -1,11 +1,11 @@
 motor==3.7.1
 aiohttp==3.13.5
 requests==2.33.1
-python-telegram-bot==20.6
+python-telegram-bot==21.10
 pymongo==4.17.0
 pyrate-limiter==3.1.0
-apscheduler==3.6.3
+apscheduler==3.10.4
 python-dotenv==1.2.2
 cachetools==7.0.6
-pyrogram==2.0.106
+pyrofork==2.3.9
 tgcrypto==1.2.5
