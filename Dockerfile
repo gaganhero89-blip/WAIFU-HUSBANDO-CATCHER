@@ -4,70 +4,49 @@ ENV PIP_NO_CACHE_DIR 1
 
 RUN sed -i.bak 's/us-west-2\.ec2\.//' /etc/apt/sources.list
 
-# Installing Required Packages
+# Group 1 - Basic tools
 RUN apt update && apt upgrade -y && \
     apt install --no-install-recommends -y \
-    debian-keyring \
-    debian-archive-keyring \
-    bash \
-    bzip2 \
-    curl \
-    figlet \
-    git \
-    util-linux \
-    libffi-dev \
-    libjpeg-dev \
-    libjpeg62-turbo-dev \
-    libwebp-dev \
-    musl-dev \
-    musl \
-    python3-lxml \
-    postgresql \
-    postgresql-client \
-    python3-psycopg2 \
-    libpq-dev \
-    libcurl4-openssl-dev \
-    libxml2-dev \
-    libxslt1-dev \
-    python3-pip \
-    python3-requests \
-    python3-sqlalchemy \
-    python3-tz \
-    python3-aiohttp \
-    openssl \
-    pv \
-    jq \
-    wget \
-    python3 \
-    python3-dev \
-    libreadline-dev \
-    libyaml-dev \
-    gcc \
-    sqlite3 \
-    libsqlite3-dev \
-    sudo \
-    zlib1g \
-    ffmpeg \
-    libssl-dev \
-    libgconf-2-4 \
-    libxi6 \
-    xvfb \
-    unzip \
-    libopus0 \
-    libopus-dev \
-    && rm -rf /var/lib/apt/lists /var/cache/apt/archives /tmp
+    bash bzip2 curl git wget unzip sudo jq pv figlet util-linux openssl
 
-# Pypi package Repo upgrade
+# Group 2 - Build deps
+RUN apt install --no-install-recommends -y \
+    gcc musl musl-dev libffi-dev libssl-dev libreadline-dev \
+    libyaml-dev zlib1g libsqlite3-dev sqlite3 \
+    libcurl4-openssl-dev libxml2-dev libxslt1-dev
+
+# Group 3 - Image/media
+RUN apt install --no-install-recommends -y \
+    libjpeg-dev libjpeg62-turbo-dev libwebp-dev \
+    ffmpeg libopus0 libopus-dev
+
+# Group 4 - Display
+RUN apt install --no-install-recommends -y \
+    libgconf-2-4 libxi6 xvfb
+
+# Group 5 - PostgreSQL
+RUN apt install --no-install-recommends -y \
+    postgresql postgresql-client libpq-dev
+
+# Group 6 - Python packages
+RUN apt install --no-install-recommends -y \
+    python3 python3-dev python3-pip \
+    python3-lxml python3-psycopg2 python3-requests \
+    python3-sqlalchemy python3-tz python3-aiohttp
+
+# Group 7 - Debian keyring
+RUN apt install --no-install-recommends -y \
+    debian-keyring debian-archive-keyring
+
+RUN rm -rf /var/lib/apt/lists /var/cache/apt/archives /tmp
+
 RUN pip3 install --upgrade pip setuptools
 
-# Copy Python Requirements to /root/FallenRobot
 RUN git clone https://github.com/Mynameishekhar/ptb /root/ptb
 WORKDIR /root/ptb
 
 ENV PATH="/home/bot/bin:$PATH"
 
-# Install requirements
 RUN pip3 install -U -r requirements.txt
 
-# Starting Worker
 CMD ["python3", "-m", "shivu"]
